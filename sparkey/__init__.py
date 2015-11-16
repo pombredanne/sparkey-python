@@ -15,10 +15,133 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import ctypes
-import ctypes.util
+from cffi import FFI
+from functools import partial
 
-libsparkey = ctypes.cdll.LoadLibrary(ctypes.util.find_library("sparkey"))
+ffi = FFI()
+
+ffi.cdef("""
+typedef enum {
+  SPARKEY_SUCCESS = 0,
+  SPARKEY_INTERNAL_ERROR = -1,
+
+  SPARKEY_FILE_NOT_FOUND = -100,
+  SPARKEY_PERMISSION_DENIED = -101,
+  SPARKEY_TOO_MANY_OPEN_FILES = -102,
+  SPARKEY_FILE_TOO_LARGE = -103,
+  SPARKEY_FILE_ALREADY_EXISTS = -104,
+  SPARKEY_FILE_BUSY = -105,
+  SPARKEY_FILE_IS_DIRECTORY = -106,
+  SPARKEY_FILE_SIZE_EXCEEDED = -107,
+  SPARKEY_FILE_CLOSED = -108,
+  SPARKEY_OUT_OF_DISK = -109,
+  SPARKEY_UNEXPECTED_EOF = -110,
+  SPARKEY_MMAP_FAILED = -111,
+
+  SPARKEY_WRONG_LOG_MAGIC_NUMBER = -200,
+  SPARKEY_WRONG_LOG_MAJOR_VERSION = -201,
+  SPARKEY_UNSUPPORTED_LOG_MINOR_VERSION = -202,
+  SPARKEY_LOG_TOO_SMALL = -203,
+  SPARKEY_LOG_CLOSED = -204,
+  SPARKEY_LOG_ITERATOR_INACTIVE = -205,
+  SPARKEY_LOG_ITERATOR_MISMATCH = -206,
+  SPARKEY_LOG_ITERATOR_CLOSED = -207,
+  SPARKEY_LOG_HEADER_CORRUPT = -208,
+  SPARKEY_INVALID_COMPRESSION_BLOCK_SIZE = -209,
+  SPARKEY_INVALID_COMPRESSION_TYPE = -210,
+
+  SPARKEY_WRONG_HASH_MAGIC_NUMBER = -300,
+  SPARKEY_WRONG_HASH_MAJOR_VERSION = -301,
+  SPARKEY_UNSUPPORTED_HASH_MINOR_VERSION = -302,
+  SPARKEY_HASH_TOO_SMALL = -303,
+  SPARKEY_HASH_CLOSED = -304,
+  SPARKEY_FILE_IDENTIFIER_MISMATCH = -305,
+  SPARKEY_HASH_HEADER_CORRUPT = -306,
+  SPARKEY_HASH_SIZE_INVALID = -307,
+
+} sparkey_returncode;
+
+const char * sparkey_errstring(sparkey_returncode code);
+
+struct sparkey_logwriter;
+typedef struct sparkey_logwriter sparkey_logwriter;
+
+typedef enum {
+  SPARKEY_COMPRESSION_NONE,
+  SPARKEY_COMPRESSION_SNAPPY
+} sparkey_compression_type;
+
+typedef enum {
+  SPARKEY_ENTRY_PUT,
+  SPARKEY_ENTRY_DELETE
+} sparkey_entry_type;
+
+typedef enum {
+  SPARKEY_ITER_NEW,
+  SPARKEY_ITER_ACTIVE,
+  SPARKEY_ITER_CLOSED,
+  SPARKEY_ITER_INVALID
+} sparkey_iter_state;
+
+struct sparkey_logreader;
+typedef struct sparkey_logreader sparkey_logreader;
+
+struct sparkey_logiter;
+typedef struct sparkey_logiter sparkey_logiter;
+
+struct sparkey_hashreader;
+typedef struct sparkey_hashreader sparkey_hashreader;
+
+sparkey_returncode sparkey_logwriter_create(sparkey_logwriter **log, const char *filename, sparkey_compression_type compression_type, int compression_block_size);
+sparkey_returncode sparkey_logwriter_append(sparkey_logwriter **log, const char *filename);
+sparkey_returncode sparkey_logwriter_put(sparkey_logwriter *log, uint64_t keylen, const uint8_t *key, uint64_t valuelen, const uint8_t *value);
+sparkey_returncode sparkey_logwriter_delete(sparkey_logwriter *log, uint64_t keylen, const uint8_t *key);
+sparkey_returncode sparkey_logwriter_flush(sparkey_logwriter *log);
+sparkey_returncode sparkey_logwriter_close(sparkey_logwriter **log);
+
+/* logreader */
+
+sparkey_returncode sparkey_logreader_open(sparkey_logreader **log, const char *filename);
+void sparkey_logreader_close(sparkey_logreader **log);
+uint64_t sparkey_logreader_maxkeylen(sparkey_logreader *log);
+uint64_t sparkey_logreader_maxvaluelen(sparkey_logreader *log);
+int sparkey_logreader_get_compression_blocksize(sparkey_logreader *log);
+sparkey_compression_type sparkey_logreader_get_compression_type(sparkey_logreader *log);
+sparkey_returncode sparkey_logiter_create(sparkey_logiter **iter, sparkey_logreader *log);
+void sparkey_logiter_close(sparkey_logiter **iter);
+sparkey_returncode sparkey_logiter_seek(sparkey_logiter *iter, sparkey_logreader *log, uint64_t position);
+sparkey_returncode sparkey_logiter_skip(sparkey_logiter *iter, sparkey_logreader *log, int count);
+sparkey_returncode sparkey_logiter_next(sparkey_logiter *iter, sparkey_logreader *log);
+sparkey_returncode sparkey_logiter_reset(sparkey_logiter *iter, sparkey_logreader *log);
+sparkey_returncode sparkey_logiter_keychunk(sparkey_logiter *iter, sparkey_logreader *log, uint64_t maxlen, uint8_t ** res, uint64_t *len);
+sparkey_returncode sparkey_logiter_valuechunk(sparkey_logiter *iter, sparkey_logreader *log, uint64_t maxlen, uint8_t ** res, uint64_t *len);
+sparkey_returncode sparkey_logiter_fill_key(sparkey_logiter *iter, sparkey_logreader *log, uint64_t maxlen, uint8_t *buf, uint64_t *len);
+sparkey_returncode sparkey_logiter_fill_value(sparkey_logiter *iter, sparkey_logreader *log, uint64_t maxlen, uint8_t *buf, uint64_t *len);
+sparkey_returncode sparkey_logiter_keycmp(sparkey_logiter *iter1, sparkey_logiter *iter2, sparkey_logreader *log, int *res);
+sparkey_iter_state sparkey_logiter_state(sparkey_logiter *iter);
+sparkey_entry_type sparkey_logiter_type(sparkey_logiter *iter);
+uint64_t sparkey_logiter_keylen(sparkey_logiter *iter);
+uint64_t sparkey_logiter_valuelen(sparkey_logiter *iter);
+
+/* hashwriter */
+sparkey_returncode sparkey_hash_write(const char *hash_filename, const char *log_filename, int hash_size);
+
+/* hashreader */
+sparkey_returncode sparkey_hash_open(sparkey_hashreader **reader, const char *hash_filename, const char *log_filename);
+sparkey_logreader * sparkey_hash_getreader(sparkey_hashreader *reader);
+void sparkey_hash_close(sparkey_hashreader **reader);
+sparkey_returncode sparkey_hash_get(sparkey_hashreader *reader, const uint8_t *key, uint64_t keylen, sparkey_logiter *iter);
+sparkey_returncode sparkey_logiter_hashnext(sparkey_logiter *iter, sparkey_hashreader *reader);
+uint64_t sparkey_hash_numentries(sparkey_hashreader *reader);
+uint64_t sparkey_hash_numcollisions(sparkey_hashreader *reader);
+
+/* util */
+
+char * sparkey_create_log_filename(const char *index_filename);
+char * sparkey_create_index_filename(const char *log_filename);
+""")
+
+libsparkey = ffi.dlopen('sparkey')
 
 
 # Some constants
@@ -41,84 +164,6 @@ class IterType(object):
 
 class SparkeyException(Exception):
     pass
-
-
-def _format(func, ret, *args):
-    func.restype = ret
-    func.argtypes = tuple(args)
-    return func
-
-
-def _ctypes_wrapper(func, ret, *args):
-    fn = _format(func, ret, *args)
-
-    def wrapper(*a, **kw):
-        code = fn(*a, **kw)
-        if code != 0:
-            raise SparkeyException(_errstring(code))
-    return wrapper
-
-
-
-_ptr = ctypes.c_void_p
-_str = ctypes.c_char_p
-_byref = ctypes.byref
-_create_string_buffer = ctypes.create_string_buffer
-_c_ulonglong = ctypes.c_ulonglong
-
-_errstring = _format(libsparkey.sparkey_errstring, _str, ctypes.c_int)
-
-_logwriter_create = _ctypes_wrapper(libsparkey.sparkey_logwriter_create,
-                                    ctypes.c_int, _ptr, _str, ctypes.c_int,
-                                    ctypes.c_int)
-_logwriter_append = _ctypes_wrapper(libsparkey.sparkey_logwriter_append,
-                                    ctypes.c_int, _ptr, _str)
-_logwriter_close = _ctypes_wrapper(libsparkey.sparkey_logwriter_close,
-                                   ctypes.c_int, _ptr)
-_logwriter_flush = _ctypes_wrapper(libsparkey.sparkey_logwriter_flush,
-                                   ctypes.c_int, _ptr)
-_logwriter_put = _ctypes_wrapper(libsparkey.sparkey_logwriter_put,
-                                 ctypes.c_int, _ptr, _c_ulonglong, _str,
-                                 _c_ulonglong, _str)
-_logwriter_delete = _ctypes_wrapper(libsparkey.sparkey_logwriter_delete,
-                                    ctypes.c_int, _ptr, _c_ulonglong, _str)
-
-_logreader_open = _ctypes_wrapper(libsparkey.sparkey_logreader_open,
-                                  ctypes.c_int, _ptr, _str)
-_logreader_close = _format(libsparkey.sparkey_logreader_close, None, _ptr)
-
-_logiter_close = _format(libsparkey.sparkey_logiter_close, None, _ptr)
-_logiter_create = _ctypes_wrapper(libsparkey.sparkey_logiter_create,
-                                  ctypes.c_int, _ptr, _ptr)
-_logiter_next = _ctypes_wrapper(libsparkey.sparkey_logiter_next, ctypes.c_int,
-                                _ptr, _ptr)
-_logiter_state = _format(libsparkey.sparkey_logiter_state,
-                         ctypes.c_int, _ptr)
-_logiter_type = _format(libsparkey.sparkey_logiter_type, ctypes.c_int, _ptr)
-_logiter_keylen = _format(libsparkey.sparkey_logiter_keylen, _c_ulonglong, _ptr)
-_logiter_valuelen = _format(libsparkey.sparkey_logiter_valuelen,
-                            _c_ulonglong, _ptr)
-_logiter_fill_key = _ctypes_wrapper(libsparkey.sparkey_logiter_fill_key,
-                                    ctypes.c_int, _ptr, _ptr, _c_ulonglong,
-                                    _str, ctypes.POINTER(_c_ulonglong))
-_logiter_fill_value = _ctypes_wrapper(libsparkey.sparkey_logiter_fill_value,
-                                      ctypes.c_int, _ptr, _ptr, _c_ulonglong,
-                                      _str, ctypes.POINTER(_c_ulonglong))
-
-_hash_write = _ctypes_wrapper(libsparkey.sparkey_hash_write, ctypes.c_int,
-                              _str, _str, ctypes.c_int)
-
-_hash_open = _ctypes_wrapper(libsparkey.sparkey_hash_open, ctypes.c_int, _ptr,
-                             _str, _str)
-_hash_close = _format(libsparkey.sparkey_hash_close, None, _ptr)
-_hash_getreader = _format(libsparkey.sparkey_hash_getreader, _ptr,
-                          _ptr)
-_logiter_hashnext = _ctypes_wrapper(libsparkey.sparkey_logiter_hashnext,
-                                    ctypes.c_int, _ptr, _ptr)
-_hash_get = _ctypes_wrapper(libsparkey.sparkey_hash_get, ctypes.c_int, _ptr,
-                            _str, _c_ulonglong, _ptr)
-_hash_numentries = _format(libsparkey.sparkey_hash_numentries,
-                           _c_ulonglong, _ptr)
 
 
 class LogWriter(object):
@@ -153,14 +198,13 @@ class LogWriter(object):
                fairly small multiple of expected key + value size.
 
         """
-        log = _ptr()
-        self._log = log
+        self._log = ffi.new("sparkey_logwriter **")
         if mode == 'NEW':
-            _logwriter_create(_byref(log), filename,
+            libsparkey.sparkey_logwriter_create(self._log, filename,
                               compression_type,
                               compression_block_size)
         elif mode == 'APPEND':
-            _logwriter_append(_byref(log), filename)
+            libsparkey.sparkey_logwriter_append(self._log, filename)
         else:
             raise SparkeyException("Invalid mode %s, expected 'NEW' or "
                                    "'APPEND'" % (mode))
@@ -174,10 +218,9 @@ class LogWriter(object):
         Also flushes all pending changes from memory to file.
 
         """
-        log = self._log
-        if log is not None:
+        if self._log is not None:
+            libsparkey.sparkey_logwriter_close(self._log)
             self._log = None
-            _logwriter_close(_byref(log))
 
     def _assert_open(self):
         if self._log is None:
@@ -186,7 +229,7 @@ class LogWriter(object):
     def flush(self):
         """Flushes all pending changes from memory to file."""
         self._assert_open()
-        _logwriter_flush(self._log)
+        libsparkey.sparkey_logwriter_flush(self._log[0])
 
     def __setitem__(self, key, value):
         """Equivalent to put(key, value)"""
@@ -204,7 +247,7 @@ class LogWriter(object):
             raise SparkeyException("key must be a string")
         if type(value) != str:
             raise SparkeyException("value must be a string")
-        _logwriter_put(self._log, len(key), key, len(value), value)
+        libsparkey.sparkey_logwriter_put(self._log[0], len(key), key, len(value), value)
 
     def __delitem__(self, key):
         """del writer[key] is equivalent to delete(key) (see L{delete})"""
@@ -219,7 +262,7 @@ class LogWriter(object):
         self._assert_open()
         if type(key) != str:
             raise SparkeyException("key must be a string")
-        _logwriter_delete(self._log, len(key), key)
+        libsparkey.sparkey_logwriter_delete(self._log[0], len(key), key)
 
 
 class LogReader(object):
@@ -229,19 +272,17 @@ class LogReader(object):
         @param filename: file to open.
 
         """
-        log = _ptr()
-        self._log = log
-        _logreader_open(_byref(log), filename)
+        self._log = ffi.new("sparkey_logreader **")
+        libsparkey.sparkey_logreader_open(self._log, filename)
 
     def __del__(self):
         self.close()
 
     def close(self):
         """Safely closes the log reader."""
-        log = self._log
-        if log is not None:
+        if self._log is not None:
+            libsparkey.sparkey_logreader_close(self._log)
             self._log = None
-            _logreader_close(_byref(log))
 
     def __iter__(self):
         """Creates a new iterator for this log reader.
@@ -257,29 +298,30 @@ class LogReader(object):
 
 
 def _iter_res(iterator, log):
-    state = _logiter_state(iterator)
+    iterator_ = iterator[0]
+    state = libsparkey.sparkey_logiter_state(iterator_)
 
     if state != IterState.ACTIVE:
         raise StopIteration()
-    type_ = _logiter_type(iterator)
+    type_ = libsparkey.sparkey_logiter_type(iterator_)
 
-    keylen = _logiter_keylen(iterator)
-    string_buffer = _create_string_buffer(keylen)
-    length = _c_ulonglong()
-    _logiter_fill_key(iterator, log, keylen, string_buffer, _byref(length))
+    keylen = libsparkey.sparkey_logiter_keylen(iterator_)
+    string_buffer = ffi.new("uint8_t*", keylen)
+    length = ffi.new("uint64_t*")
+    libsparkey.sparkey_logiter_fill_key(iterator_, log[0], keylen, string_buffer, length)
 
-    if length.value != keylen:
+    if length[0] != keylen:
         raise SparkeyException("Invalid keylen, expected %s but got %s" %
-                               (keylen, length.value))
+                               (keylen, length[0]))
+    key = ffi.string(string_buffer, length[0])
 
-    key = string_buffer.raw
-    valuelen = _logiter_valuelen(iterator)
-    string_buffer = _create_string_buffer(valuelen)
-    _logiter_fill_value(iterator, log, valuelen, string_buffer, _byref(length))
-    if length.value != valuelen:
-        raise SparkeyException("Invalid valuelen, expected %s but got %s" %
-                               (valuelen, length.value))
-    value = string_buffer.raw
+    value_len = libsparkey.sparkey_logiter_valuelen(iterator_)
+    string_buffer = ffi.new("uint8_t*", value_len)
+    libsparkey.sparkey_logiter_fill_value(iterator_, log[0], value_len, string_buffer, length)
+    if length[0] != value_len:
+        raise SparkeyException("Invalid value_len, expected %s but got %s" %
+                               (value_len, length[0]))
+    value = ffi.string(string_buffer, length[0])
     return key, value, type_
 
 
@@ -291,9 +333,9 @@ class LogIter(object):
         instead.
         """
         logreader._assert_open()
-        self._iter = _ptr()
+        self._iter = ffi.new("sparkey_logiter**")
         self._log = logreader
-        _logiter_create(_byref(self._iter), logreader._log)
+        libsparkey.sparkey_logiter_create(self._iter, logreader._log[0])
 
     def __del__(self):
         self.close()
@@ -301,7 +343,7 @@ class LogIter(object):
     def close(self):
         """Safely closes the iterator."""
         if self._iter is not None:
-            _logiter_close(_byref(self._iter))
+            libsparkey.sparkey_logiter_close(self._iter)
             self._iter = None
 
     def __iter__(self):
@@ -322,7 +364,7 @@ class LogIter(object):
 
         """
         self._assert_open()
-        _logiter_next(self._iter, self._log._log)
+        libsparkey.sparkey_logiter_next(self._iter[0], self._log._log[0])
         return _iter_res(self._iter, self._log._log)
 
 
@@ -341,7 +383,7 @@ def writehash(hashfile, logfile, hash_size=0):
                       hash size. 4 is 32 bit hash, 8 is 64 bit hash.
 
     """
-    _hash_write(hashfile, logfile, hash_size)
+    libsparkey.sparkey_hash_write(hashfile, logfile, hash_size)
 
 
 class HashReader(object):
@@ -356,37 +398,31 @@ class HashReader(object):
         @param logfile: Log file to open, must exist.
 
         """
-        reader = _ptr()
-        self._reader = reader
-        self._iter = None
-        _hash_open(_byref(reader), hashfile, logfile)
-        self._iter = HashIterator(self)
+        self._reader = ffi.new("struct sparkey_hashreader**")
+        rc = libsparkey.sparkey_hash_open(self._reader, hashfile, logfile)
+        if rc != 0:
+            error_str = ffi.string(libsparkey.sparkey_errstring(rc))
+            raise Exception(error_str)
+        self._iterator = ffi.new("sparkey_logiter**")
+        self._log = libsparkey.sparkey_hash_getreader(self._reader[0])
+        libsparkey.sparkey_logiter_create(self._iterator, self._log)
 
     def __del__(self):
         self.close()
 
     def close(self):
         """Safely close the reader."""
-        reader = self._reader
-        if reader is not None:
-            _hash_close(_byref(reader))
+        if self._reader is not None:
+            libsparkey.sparkey_hash_close(self._reader)
             self._reader = None
 
-        if self._iter is not None:
-            self._iter.close()
-            self._iter = None
+        if self._iterator is not None:
+            libsparkey.sparkey_logiter_close(self._iterator)
+            self._iterator = None
 
     def __iter__(self):
-        """Equivalent to L{iteritems}"""
-        return self.iteritems()
-
-    def iteritems(self):
-        """Iterate through all live entries.
-
-        @returntype: L{HashIterator}
-
-        """
-        return HashIterator(self)
+        """Iterate through all live entries."""
+        return iterate_items(self)
 
     def _assert_open(self):
         if self._reader is None:
@@ -404,18 +440,26 @@ class HashReader(object):
 
     def __contains__(self, key):
         self._assert_open()
-        iterator = self._iter._iter
-
-        _hash_get(self._reader, key, len(key), iterator)
-
-        res = True
-        state = _logiter_state(iterator)
-        if state != IterState.ACTIVE:
-            res = False
-        return res
+        iterator_ = self._iterator[0]
+        libsparkey.sparkey_hash_get(self._reader[0], key, len(key), iterator_)
+        return libsparkey.sparkey_logiter_state(iterator_) == libsparkey.SPARKEY_ITER_ACTIVE
 
     def has_key(self, key):
         return self.__contains__(key)
+
+    def _value_chunk(self, maxlen):
+        iterator_ = self._iterator[0]
+        res = ""
+        while maxlen > 0:
+            buff = ffi.new("uint8_t **")
+            blen = ffi.new("uint64_t*")
+            libsparkey.sparkey_logiter_valuechunk(iterator_, self._log, maxlen, buff, blen)
+            if blen == 0:
+                return res
+            res += ffi.string(buff[0], blen[0])
+            maxlen -= blen[0]
+        return res
+
 
     def get(self, key):
         """Retrieve the value assosiated with the key
@@ -425,94 +469,56 @@ class HashReader(object):
         @returns: the value associated with the key, or None if the
                   key does not exist.
         """
-        return self._iter.get(key)
+        iterator_ = self._iterator[0]
+        rc = libsparkey.sparkey_hash_get(self._reader[0], key, len(key), iterator_)
+        if rc != 0:
+            raise SparkeyException(ffi.string(libsparkey.sparkey_errstring(rc)))
+        if libsparkey.sparkey_logiter_state(iterator_) != libsparkey.SPARKEY_ITER_ACTIVE:
+            return None
+        assert libsparkey.sparkey_logiter_type(iterator_) == libsparkey.SPARKEY_ENTRY_PUT
+        valuelen = libsparkey.sparkey_logiter_valuelen(iterator_)
+        return self._value_chunk(valuelen)
 
     def __len__(self):
-        return _hash_numentries(self._reader)
+        return libsparkey.sparkey_hash_numentries(self._reader[0])
+
+# helpers
+def chunk_with_func(func, maxlen, iterator, log):
+    res = ""
+    while maxlen > 0:
+        buff = ffi.new("uint8_t **")
+        blen = ffi.new("uint64_t*")
+        func(iterator, log, maxlen, buff, blen)
+        if blen == 0:
+            return res
+        res += ffi.string(buff[0], blen[0])
+        maxlen -= blen[0]
+    return res
 
 
-class HashIterator(object):
-    def __init__(self, hashreader):
-        """Internal function: use iter(hashreader) instead."""
-        hashreader._assert_open()
-        self._iter = _ptr()
-        self._log = _hash_getreader(hashreader._reader)
-        self._hashreader = hashreader
-        _logiter_create(_byref(self._iter), self._log)
+key_chunk = partial(chunk_with_func,
+                    libsparkey.sparkey_logiter_keychunk)
 
-    def __del__(self):
-        self.close()
+value_chunk = partial(chunk_with_func,
+                      libsparkey.sparkey_logiter_valuechunk)
 
-    def close(self):
-        """Safely closes the iterator."""
-        if self._iter is not None:
-            _logiter_close(_byref(self._iter))
-            self._hashreader = None
-            self._log = None
-            self._iter = None
-
-    def __iter__(self):
-        return self
-
-    def next(self):
-        """Return next live entry in the log.
-
-        @return: (key, value) if there are remaining elements. key and
-                 value are strings.
-
-        @raise StopIteration: if there are no more live entries in the
-        log.
-
-        """
-        self._assert_open()
-        _logiter_hashnext(self._iter, self._hashreader._reader)
-        t = _iter_res(self._iter, self._log)
-        if t:
-            key, value, type = t
-            return key, value
-
-    def _assert_open(self):
-        if self._hashreader is None:
-            raise SparkeyException("Iterator is closed")
-        self._hashreader._assert_open()
-
-    def __getitem__(self, key):
-        value = self.get(key)
-        if value is None:
-            raise KeyError
-        return value
-
-    def get(self, key):
-        """Get the value associated with the key
-
-        @param key: must be a string
-
-        @returns: the value associated with the key, or None if the
-                  key does not exist.
-
-        """
-        self._assert_open()
-        iterator = self._iter
-        log = self._log
-
-        _hash_get(self._hashreader._reader, key, len(key), iterator)
-
-        state = _logiter_state(iterator)
-        if state != IterState.ACTIVE:
-            return None
-        type_ = _logiter_type(iterator)
-        assert type_ == IterType.PUT
-
-        valuelen = _logiter_valuelen(iterator)
-        string_buffer = _create_string_buffer(valuelen)
-        clen = _c_ulonglong()
-        _logiter_fill_value(iterator, log, valuelen, string_buffer,
-                            _byref(clen))
-        if clen.value != valuelen:
-            raise SparkeyException("Invalid valuelen, expected %s but got %s" %
-                                   (valuelen, clen.value))
-        value = string_buffer.raw
-        return value
+#iterator generator
+def iterate_items(hash_reader):
+    reader = hash_reader._reader
+    iterator = ffi.new("sparkey_logiter**")
+    log = libsparkey.sparkey_hash_getreader(reader[0])
+    libsparkey.sparkey_logiter_create(iterator, log)
+    iterator_ = iterator[0]
+    while 1:
+        libsparkey.sparkey_logiter_hashnext(iterator_, reader[0])
+        if libsparkey.sparkey_logiter_state(iterator_) != libsparkey.SPARKEY_ITER_ACTIVE:
+            break
+        valuelen = libsparkey.sparkey_logiter_valuelen(iterator_)
+        keylen = libsparkey.sparkey_logiter_keylen(iterator_)
+        key = key_chunk(keylen, iterator_, log)
+        value = value_chunk(valuelen, iterator_, log)
+        yield key, value
+    libsparkey.sparkey_logiter_close(iterator)
 
 
 class HashWriter(object):
